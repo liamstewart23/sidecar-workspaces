@@ -17,7 +17,6 @@ This is a **snapshot** at creation time, not a live overlay: later edits in the 
 - Node.js 14.17 or newer to run Sidecar.
 - Git for `diff` and `apply`.
 - macOS APFS for copy-on-write storage savings. Other filesystems use a regular isolated copy.
-- Valet is optional and only needed by projects that opt into it.
 
 ## Install
 
