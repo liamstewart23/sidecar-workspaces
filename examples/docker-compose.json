@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "processes": {
+    "app": {
+      "command": "docker compose up",
+      "autostart": true
+    }
+  },
+  "tasks": {
+    "test": {
+      "command": "docker compose run --rm app npm test"
+    }
+  }
+}

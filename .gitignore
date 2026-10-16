@@ -1,0 +1,3 @@
+.sidecar/
+.sidecar.local.json
+node_modules/

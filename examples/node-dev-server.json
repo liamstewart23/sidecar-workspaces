@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "runtime": {
+    "shell": "zsh",
+    "bootstrap": [
+      "source \"$HOME/.nvm/nvm.sh\"",
+      "nvm use"
+    ]
+  },
+  "processes": {
+    "dev": {
+      "command": "npm run dev",
+      "autostart": true
+    }
+  }
+}

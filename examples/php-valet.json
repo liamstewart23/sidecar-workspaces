@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "valet": {
+    "domain": "{name}.test",
+    "secure": true,
+    "isolate": true
+  },
+  "tasks": {
+    "migrate": {
+      "command": "php artisan migrate"
+    }
+  }
+}
