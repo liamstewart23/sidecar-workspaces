@@ -64,6 +64,8 @@ sidecar status preview-42
 
 `up` prints the Sidecar’s `View` path. Open that directory in your editor, or launch/direct any coding agent from there. The main project checkout remains untouched.
 
+Inside a Sidecar view, Sidecar finds its session automatically, so the name is optional: `sidecar status`, `sidecar diff`, `sidecar apply`, `sidecar down`, `sidecar task seed-demo`, `sidecar watch dev`, and `sidecar exec -- npm test` all target the current Sidecar. Existing explicit-name forms, such as `sidecar task preview-42 seed-demo`, continue to work.
+
 ## Optional integrations
 
 Start with only `{ "version": 1 }`, then add integrations when a project needs them:

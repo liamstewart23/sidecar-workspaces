@@ -24,17 +24,17 @@ function usage() {
 Usage:
   sidecar init
   sidecar up <name> [--no-watch] [--no-valet]
-  sidecar watch <name> [process]
-  sidecar exec <name> -- <command> [args...]
-  sidecar task <name> <task> [-- <args...>]
-  sidecar guide <name>
-  sidecar status <name>
-  sidecar diff <name>
-  sidecar apply <name>
-  sidecar down <name>
-  sidecar remove <name> --force
+  sidecar watch [name] [process]
+  sidecar exec [name] -- <command> [args...]
+  sidecar task [name] <task> [-- <args...>]
+  sidecar guide [name]
+  sidecar status [name]
+  sidecar diff [name]
+  sidecar apply [name]
+  sidecar down [name]
+  sidecar remove [name] --force
 
-The current directory can be anywhere inside a project containing ${CONFIG_FILE}.`;
+The name is optional when run from inside a Sidecar view.`;
 }
 
 function safeName(value) {
@@ -67,6 +67,24 @@ function findProject(start = process.cwd()) {
     if (fs.existsSync(path.join(current, CONFIG_FILE))) return current;
     const parent = path.dirname(current);
     if (parent === current) fail(`Could not find ${CONFIG_FILE} above ${start}. Run \`sidecar init\` in a project first.`);
+    current = parent;
+  }
+}
+
+function findSidecarContext(start = process.cwd()) {
+  let current = fs.realpathSync(start);
+  while (true) {
+    const statePath = path.join(path.dirname(current), 'state.json');
+    if (fs.existsSync(statePath)) {
+      try {
+        const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+        if (state.name && state.projectRoot && state.view && fs.realpathSync(state.view) === current) {
+          return { name: safeName(state.name), projectRoot: state.projectRoot, view: current };
+        }
+      } catch (_) {}
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
     current = parent;
   }
 }
@@ -187,9 +205,9 @@ function bootstrapFor(config) {
   return ((config.runtime && config.runtime.bootstrap) || []).join('\n');
 }
 
-function buildCommandScript(config, command) {
+function buildCommandScript(config) {
   const bootstrap = bootstrapFor(config);
-  return `${bootstrap}${bootstrap ? '\n' : ''}exec /bin/sh -lc "$1"`;
+  return `${bootstrap}${bootstrap ? '\n' : ''}exec ${shellQuote(shellFor(config))} -lc "$1"`;
 }
 
 function runConfiguredCommand(config, state, command, { detached = false, logFile } = {}) {
@@ -197,7 +215,7 @@ function runConfiguredCommand(config, state, command, { detached = false, logFil
   const stderr = fs.openSync(logFile, 'a');
   let child;
   try {
-    child = spawn(shellFor(config), ['-lc', buildCommandScript(config, command), 'sidecar', command], {
+    child = spawn(shellFor(config), ['-lc', buildCommandScript(config), 'sidecar', command], {
       cwd: state.view,
       env: sidecarEnvironment(state),
       detached,
@@ -406,7 +424,7 @@ function runTask(config, paths, state, taskName, taskArgs = []) {
   const rendered = render(command, stateContext(state));
   const commandWithArgs = [rendered, ...taskArgs.map(shellQuote)].join(' ');
   ensureShell(shellFor(config));
-  const result = spawnSync(shellFor(config), ['-lc', buildCommandScript(config, commandWithArgs), 'sidecar', commandWithArgs], {
+  const result = spawnSync(shellFor(config), ['-lc', buildCommandScript(config), 'sidecar', commandWithArgs], {
     cwd: state.view,
     env: sidecarEnvironment(state),
     stdio: 'inherit'
@@ -521,49 +539,64 @@ function takeFlag(args, flag) {
   return true;
 }
 
-function contextFor(name) {
-  const projectRoot = findProject();
+function contextFor(name, sidecarContext = findSidecarContext()) {
+  const projectRoot = sidecarContext ? sidecarContext.projectRoot : findProject();
   const config = loadConfig(projectRoot);
   const paths = sessionPaths(projectRoot, name);
   const state = readState(paths);
+  if (sidecarContext && fs.realpathSync(state.view) !== sidecarContext.view) {
+    fail(`Sidecar context does not match the stored view for \`${name}\`.`);
+  }
   return { projectRoot, config, paths, state };
 }
 
+function nameForCurrentSidecar(args, sidecarContext) {
+  if (args[0] && args[0] !== '--') return safeName(args.shift());
+  if (sidecarContext) return sidecarContext.name;
+  return safeName(args.shift());
+}
+
 function commandWatch(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const explicitCurrentName = sidecarContext && args[0] && args[0].toLowerCase() === sidecarContext.name;
+  const name = explicitCurrentName ? safeName(args.shift()) : (sidecarContext ? sidecarContext.name : safeName(args.shift()));
   const processName = args.shift();
   if (args.length) fail(`Unknown argument: ${args[0]}`);
-  const context = contextFor(name);
+  const context = contextFor(name, sidecarContext);
   startProcess(context.projectRoot, context.config, context.paths, context.state, processName || defaultProcess(context.config));
 }
 
 function commandExec(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   const separator = args.indexOf('--');
   if (separator === -1 || separator === args.length - 1) fail('Use: sidecar exec <name> -- <command> [args...]');
   if (separator !== 0) fail('Use: sidecar exec <name> -- <command> [args...]');
   const commandArgs = args.slice(separator + 1);
-  const context = contextFor(name);
+  const context = contextFor(name, sidecarContext);
   ensureShell(shellFor(context.config));
   runExactCommand(context.config, context.state, commandArgs[0], commandArgs.slice(1));
 }
 
 function commandTask(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const explicitCurrentName = sidecarContext && args.length > 1 && args[0].toLowerCase() === sidecarContext.name;
+  const name = explicitCurrentName ? safeName(args.shift()) : (sidecarContext ? sidecarContext.name : safeName(args.shift()));
   const taskName = args.shift();
   const separator = args.indexOf('--');
   if (!taskName || (separator !== -1 && separator !== 0) || (separator === -1 && args.length)) {
-    fail('Use: sidecar task <name> <task> [-- <args...>]');
+    fail('Use: sidecar task [name] <task> [-- <args...>]');
   }
   const taskArgs = separator === -1 ? [] : args.slice(1);
-  const context = contextFor(name);
+  const context = contextFor(name, sidecarContext);
   runTask(context.config, context.paths, context.state, taskName, taskArgs);
 }
 
 function commandGuide(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (args.length) fail('Use: sidecar guide <name>');
-  const { projectRoot, config, state } = contextFor(name);
+  const { projectRoot, config, state } = contextFor(name, sidecarContext);
   const guide = (config.agent && config.agent.guide) || GUIDE_FILE;
   const guidePath = path.resolve(projectRoot, guide);
   if (!guidePath.startsWith(`${projectRoot}${path.sep}`) || !fs.existsSync(guidePath)) {
@@ -573,9 +606,10 @@ function commandGuide(args) {
 }
 
 function commandStatus(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (args.length) fail(`Unknown argument: ${args[0]}`);
-  const { state } = contextFor(name);
+  const { state } = contextFor(name, sidecarContext);
   console.log(`Sidecar: ${state.name}`);
   console.log(`View:    ${state.view}`);
   console.log(`Mode:    ${state.backend}`);
@@ -591,9 +625,10 @@ function commandStatus(args) {
 }
 
 function commandDiff(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (args.length) fail(`Unknown argument: ${args[0]}`);
-  const { state } = contextFor(name);
+  const { state } = contextFor(name, sidecarContext);
   if (!state.baseCommit) fail('Diff requires a Git repository.');
   const result = git(state.view, ['diff', '--stat', state.baseCommit]);
   process.stdout.write(result.stdout);
@@ -627,9 +662,10 @@ function assertSafeApplyTarget(projectRoot, relativePath, target) {
 }
 
 function commandApply(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (args.length) fail(`Unknown argument: ${args[0]}`);
-  const { projectRoot, config, paths, state } = contextFor(name);
+  const { projectRoot, config, paths, state } = contextFor(name, sidecarContext);
   if (!state.baseCommit) fail('Apply requires a Git repository.');
   assertReadyToApply(projectRoot, state);
   runHooks(config, paths, state, 'beforeApply');
@@ -665,18 +701,20 @@ function commandApply(args) {
 }
 
 function commandDown(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (args.length) fail(`Unknown argument: ${args[0]}`);
-  const { config, paths, state } = contextFor(name);
+  const { config, paths, state } = contextFor(name, sidecarContext);
   const hookError = shutdownSidecar(config, paths, state);
   console.log(`Sidecar ${name} is down. Its view and changes are retained.`);
   if (hookError) throw hookError;
 }
 
 function commandRemove(args) {
-  const name = safeName(args.shift());
+  const sidecarContext = findSidecarContext();
+  const name = nameForCurrentSidecar(args, sidecarContext);
   if (!takeFlag(args, '--force') || args.length) fail('Use: sidecar remove <name> --force');
-  const { config, paths, state } = contextFor(name);
+  const { config, paths, state } = contextFor(name, sidecarContext);
   const hookError = shutdownSidecar(config, paths, state);
   fs.rmSync(paths.root, { recursive: true, force: true });
   console.log(`Removed Sidecar ${name}.`);

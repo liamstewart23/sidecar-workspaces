@@ -55,6 +55,10 @@ function lifecycleTest() {
     fs.writeFileSync(path.join(root, '.sidecar.json'), JSON.stringify({
       version: 1,
       runtime: { shell: '/bin/sh', bootstrap: ['export SIDECAR_TEST_RUNTIME=ready'] },
+      processes: {
+        watch: { command: 'sleep 30' },
+        custom: { command: 'sleep 30' }
+      },
       tasks: {
         marker: { command: 'printf "%s:%s" "$SIDECAR_NAME" "$SIDECAR_TEST_RUNTIME" > task.txt' },
         before: { command: 'printf before > before-up.txt' },
@@ -79,6 +83,16 @@ function lifecycleTest() {
     assert.equal(state.url, '');
     assert.equal(fs.readFileSync(path.join(view, 'before-up.txt'), 'utf8'), 'before');
     assert.equal(fs.readFileSync(path.join(view, 'task.txt'), 'utf8'), 'dev-42:ready');
+    assert.match(run(view, stateHome, 'status'), /Sidecar: dev-42/);
+    run(view, stateHome, 'task', 'argument', '--', 'inside the view');
+    assert.equal(fs.readFileSync(path.join(view, 'task-argument.txt'), 'utf8'), 'inside the view');
+    run(view, stateHome, 'task', 'dev-42', 'argument', '--', 'explicit inside the view');
+    assert.equal(fs.readFileSync(path.join(view, 'task-argument.txt'), 'utf8'), 'explicit inside the view');
+    run(view, stateHome, 'watch', 'dev-42');
+    run(view, stateHome, 'watch', 'custom');
+    assert.match(run(view, stateHome, 'watch', 'dev-42', 'custom'), /custom is already running/);
+    run(view, stateHome, 'exec', '--', 'sh', '-c', 'printf inside > inside-exec.txt');
+    assert.equal(fs.readFileSync(path.join(view, 'inside-exec.txt'), 'utf8'), 'inside');
     run(root, stateHome, 'task', 'dev-42', 'argument', '--', 'hello world');
     assert.equal(fs.readFileSync(path.join(view, 'task-argument.txt'), 'utf8'), 'hello world');
     const guide = run(root, stateHome, 'guide', 'dev-42');
@@ -249,6 +263,32 @@ function initTest() {
   }
 }
 
+function runtimeShellTest() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-runtime-shell-'));
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-runtime-shell-state-'));
+  const shell = path.join(root, 'configured-shell');
+  try {
+    fs.writeFileSync(shell, '#!/bin/sh\nexport SIDECAR_SHELL_SELECTED="${SIDECAR_SHELL_SELECTED:-}x"\nexec /bin/sh "$@"\n');
+    fs.chmodSync(shell, 0o755);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', 'sidecar@example.test'], { cwd: root });
+    execFileSync('git', ['config', 'user.name', 'Sidecar Test'], { cwd: root });
+    fs.writeFileSync(path.join(root, '.sidecar.json'), JSON.stringify({
+      version: 1,
+      runtime: { shell },
+      tasks: { verifyShell: { command: 'test "$SIDECAR_SHELL_SELECTED" = xx' } }
+    }, null, 2));
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: root });
+
+    run(root, stateHome, 'up', 'shell-test', '--no-watch', '--no-valet');
+    run(root, stateHome, 'task', 'shell-test', 'verifyShell');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(stateHome, { recursive: true, force: true });
+  }
+}
+
 try {
   lifecycleTest();
   console.log('ok - creates, diffs, applies, and removes an isolated Sidecar');
@@ -258,6 +298,8 @@ try {
   console.log('ok - safely stops managed processes and ignores stale process identities');
   invalidShellAndApplySafetyTest();
   console.log('ok - rejects invalid shells and unsafe apply targets without partial changes');
+  runtimeShellTest();
+  console.log('ok - runs configured commands in the configured shell');
   initTest();
   console.log('ok - initializes a project configuration and local override ignore rule');
 } catch (error) {
